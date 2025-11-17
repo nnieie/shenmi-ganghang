@@ -358,3 +358,76 @@ export function updateWaveDirections(grid: GridPoint[][], T: number, alpha0: num
     }
   }
 }
+
+/**
+ * 使用有限差分法求解波向角分布（理论实现）
+ * 求解偏微分方程：∂(k·cosα)/∂y = -∂(k·sinα)/∂x
+ *
+ * 这个函数展示了如何用有限差分法替换上面的简化方法
+ * 目前未在实际代码中使用，仅作为理论参考
+ */
+export function updateWaveDirectionsFDM(grid: GridPoint[][], T: number, alpha0: number): void {
+  if (!grid.length || !grid[0].length) {
+    return;
+  }
+
+  const gridY = grid.length;
+  const gridX = grid[0].length;
+  const dx = grid[0][1].x - grid[0][0].x; // 网格间距x
+  const dy = grid[1][0].y - grid[0][0].y; // 网格间距y
+
+  // 初始化深水边界条件（顶部）
+  for (let i = 0; i < gridX; i++) {
+    grid[gridY - 1][i].alpha = alpha0;
+  }
+
+  // 使用有限差分法逐步求解
+  // 从深水区向浅水区推进（从j=gridY-2到j=0）
+  for (let j = gridY - 2; j >= 0; j--) {
+    for (let i = 0; i < gridX; i++) {
+      const point = grid[j][i];
+
+      if (point.h <= 0.1 || point.k <= 0) {
+        point.alpha = 0;
+        continue;
+      }
+
+      // 使用中心差分格式近似偏导数
+      // ∂(k·cosα)/∂y ≈ [k(j+1,i)·cosα(j+1,i) - k(j-1,i)·cosα(j-1,i)] / (2·dy)
+      // -∂(k·sinα)/∂x ≈ -[k(j,i+1)·sinα(j,i+1) - k(j,i-1)·sinα(j,i-1)] / (2·dx)
+
+      // 获取相邻点的值（需要边界处理）
+      const k_cos_up = (j + 1 < gridY) ? grid[j + 1][i].k * Math.cos(grid[j + 1][i].alpha) : 0;
+      const k_cos_down = (j - 1 >= 0) ? grid[j - 1][i].k * Math.cos(grid[j - 1][i].alpha) : 0;
+
+      const k_sin_right = (i + 1 < gridX) ? grid[j][i + 1].k * Math.sin(grid[j][i + 1].alpha) : 0;
+      const k_sin_left = (i - 1 >= 0) ? grid[j][i - 1].k * Math.sin(grid[j][i - 1].alpha) : 0;
+
+      // 有限差分近似
+      const d_kcos_dy = (k_cos_up - k_cos_down) / (2 * dy);
+      const d_ksin_dx = (k_sin_right - k_sin_left) / (2 * dx);
+
+      // 方程：∂(k·cosα)/∂y = -∂(k·sinα)/∂x
+      // 即：d_kcos_dy + d_ksin_dx = 0
+
+      // 这里需要迭代求解α，因为方程是非线性的
+      // 简化的处理：使用上一点的值作为初始猜测
+      let alpha = (j + 1 < gridY) ? grid[j + 1][i].alpha : alpha0;
+
+      // 简单的迭代求解（实际实现需要更复杂的算法）
+      for (let iter = 0; iter < 10; iter++) {
+        // 计算残差（简化版本）
+        const residual = d_kcos_dy + d_ksin_dx;
+
+        // 简单的修正（实际需要计算雅可比矩阵）
+        if (Math.abs(residual) > 1e-6) {
+          alpha -= 0.1 * residual; // 简单的梯度下降
+        }
+      }
+
+      // 确保角度在合理范围内
+      alpha = Math.max(-Math.PI/2, Math.min(Math.PI/2, alpha));
+      point.alpha = alpha;
+    }
+  }
+}
