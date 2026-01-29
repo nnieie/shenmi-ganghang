@@ -10,6 +10,24 @@ import { solveWaveNumber, solveFromWavelength } from './waveRefraction';
 import './styles2.css';
 
 export default function App3() {
+  // 默认参数值
+  const defaultValues = {
+    h: 20,
+    T: 8,
+    L: undefined as number | undefined,
+    H: 2,
+    slope: 0.01,
+    bayDepth: 10,
+    bayWidth: 100,
+    capeExtension: 50,
+    capeWidth: 200,
+    alpha0: 0,
+    showWaveRays: true,
+    showDepthContours: true,
+    showArrows: true,
+    rayDensity: 32
+  };
+
   // 用户可输入参数
   const [params, setParams] = useState<{
     h: number;
@@ -18,71 +36,70 @@ export default function App3() {
     H: number;
     slope: number;
     bayDepth: number;
+    bayWidth: number;
     capeExtension: number;
+    capeWidth: number;
     alpha0: number;
     showWaveRays: boolean;
     showDepthContours: boolean;
     showArrows: boolean;
-  }>({
-    // 波浪参数（只需输入其中两个，第三个会自动计算）
-    h: 20,        // 初始水深 (m)
-    T: 8,         // 周期 (s)
-    L: undefined, // 波长 (m) - 可选
-    H: 2,         // 波高 (m)
-    
-    // 地形参数
-    slope: 0.01,  // 坡度 i (0.01 = 1%)
-    bayDepth: 10, // 海湾凹进深度 (m)
-    capeExtension: 50, // 岬角凸出距离 (m)
-    
-    // 初始波向角
-    alpha0: 0,    // 深水区入射角 (degrees)
-    
-    // 显示控制
-    showWaveRays: true,
-    showDepthContours: true,
-    showArrows: true
+    rayDensity: number;
+  }>(defaultValues);
+  
+  // 输入框的字符串值（允许为空）
+  const [inputValues, setInputValues] = useState<Record<string, string>>({
+    h: '20',
+    T: '8',
+    L: '',
+    H: '2',
+    slope: '0.01',
+    bayDepth: '10',
+    bayWidth: '100',
+    capeExtension: '50',
+    capeWidth: '200',
+    alpha0: '0'
   });
   
-  // 临时参数（用于即时输入）
-  const [tempParams, setTempParams] = useState(params);
-  
-  // 处理失去焦点事件 - 自动计算缺失的参数
-  const handleBlur = () => {
-    let updatedParams = { ...tempParams };
-    
-    // 如果 h, T, L 都有值，直接应用
-    if (tempParams.h && tempParams.T && tempParams.L) {
-      setParams(updatedParams);
-      return;
-    }
-    
-    // 根据已有的参数计算缺失的参数
-    if (tempParams.h && tempParams.T && !tempParams.L) {
-      // 根据 h 和 T 计算 L
-      const k = solveWaveNumber(tempParams.h, tempParams.T);
-      const L = (2 * Math.PI) / k;
-      updatedParams.L = L;
-    } else if (tempParams.h && tempParams.L && !tempParams.T) {
-      // 根据 h 和 L 计算 T
-      const result = solveFromWavelength(tempParams.h, tempParams.L);
-      updatedParams.T = result.T;
-    } else if (tempParams.T && tempParams.L && !tempParams.h) {
-      // 根据 T 和 L 尝试反推 h (这个比较复杂，暂时不实现)
-      // 保持原值
-    }
-    
-    setTempParams(updatedParams);
-    setParams(updatedParams);
+  // 处理输入框值变化（只更新字符串，不转换为数字）
+  const handleInputChange = (field: string, value: string) => {
+    setInputValues(prev => ({ ...prev, [field]: value }));
   };
   
-  // 处理单个字段的编辑
-  const handleFieldChange = (field: 'h' | 'T' | 'L', value: string) => {
-    const numValue = value ? Number(value) : undefined;
-    setTempParams({
-      ...tempParams,
-      [field]: numValue
-    });
+  // 处理失去焦点事件 - 验证并应用参数
+  const handleInputBlur = (field: string, defaultValue: number | undefined) => {
+    const strValue = inputValues[field];
+    let numValue: number | undefined;
+    
+    if (strValue === '' || strValue === undefined) {
+      // 如果为空，使用默认值
+      numValue = defaultValue;
+      setInputValues(prev => ({ ...prev, [field]: defaultValue !== undefined ? String(defaultValue) : '' }));
+    } else {
+      numValue = Number(strValue);
+      if (isNaN(numValue)) {
+        numValue = defaultValue;
+        setInputValues(prev => ({ ...prev, [field]: defaultValue !== undefined ? String(defaultValue) : '' }));
+      }
+    }
+    
+    // 更新参数
+    let updatedParams = { ...params, [field]: numValue };
+    
+    // 特殊处理 h, T, L 的自动计算
+    if (field === 'h' || field === 'T' || field === 'L') {
+      if (updatedParams.h && updatedParams.T && !updatedParams.L) {
+        const k = solveWaveNumber(updatedParams.h, updatedParams.T);
+        const L = (2 * Math.PI) / k;
+        updatedParams.L = L;
+        setInputValues(prev => ({ ...prev, L: L.toFixed(2) }));
+      } else if (updatedParams.h && updatedParams.L && !updatedParams.T) {
+        const result = solveFromWavelength(updatedParams.h, updatedParams.L);
+        updatedParams.T = result.T;
+        setInputValues(prev => ({ ...prev, T: result.T.toFixed(2) }));
+      }
+    }
+    
+    setParams(updatedParams);
   };
   
   // 调用波浪折射模型
@@ -97,26 +114,27 @@ export default function App3() {
     H: params.H,
     slope: params.slope,
     bayDepth: params.bayDepth,
+    bayWidth: params.bayWidth,
     capeExtension: params.capeExtension,
+    capeWidth: params.capeWidth,
     alpha0: params.alpha0
   });
   
   // 处理重置
   const handleReset = () => {
-    const defaultParams = {
-      h: 20,
-      T: 8,
-      L: undefined,
-      H: 2,
-      slope: 0.01,
-      bayDepth: 10,
-      capeExtension: 50,
-      alpha0: 0,
-      showWaveRays: true,
-      showDepthContours: true,
-      showArrows: true
-    };
-    setTempParams(defaultParams);
+    setParams(defaultValues);
+    setInputValues({
+      h: '20',
+      T: '8',
+      L: '',
+      H: '2',
+      slope: '0.01',
+      bayDepth: '10',
+      bayWidth: '100',
+      capeExtension: '50',
+      capeWidth: '200',
+      alpha0: '0'
+    });
   };
   
   return (
@@ -138,6 +156,7 @@ export default function App3() {
             showWaveRays={params.showWaveRays}
             showDepthContours={params.showDepthContours}
             showArrows={params.showArrows}
+            rayDensity={params.rayDensity}
           />
         </div>
         
@@ -156,57 +175,58 @@ export default function App3() {
           {/* 波浪参数 */}
           <section className="param-section">
             <h3>🌀 波浪参数</h3>
-            <p className="hint">
-              💡 提示：<strong>h, T, L 三个参数都可编辑</strong>，失去焦点后自动应用<br/>
-              输入任意两个参数，第三个会自动计算。也可以手动输入全部三个参数。
-            </p>
+            {/* 提示已移除：编辑 h/T/L 的说明 */}
             
             <div className="param-group">
               <label>初始水深 h (m):</label>
               <input
                 type="number"
-                value={tempParams.h || ''}
-                onChange={(e) => handleFieldChange('h', e.target.value)}
-                onBlur={handleBlur}
+                value={inputValues.h}
+                onChange={(e) => handleInputChange('h', e.target.value)}
+                onBlur={() => handleInputBlur('h', 20)}
                 step="1"
                 min="0.1"
               />
+              <div className="range-hint">建议范围: 0.1 - 100 m （常用 5 - 30 m）</div>
             </div>
             
             <div className="param-group">
               <label>周期 T (s):</label>
               <input
                 type="number"
-                value={tempParams.T || ''}
-                onChange={(e) => handleFieldChange('T', e.target.value)}
-                onBlur={handleBlur}
+                value={inputValues.T}
+                onChange={(e) => handleInputChange('T', e.target.value)}
+                onBlur={() => handleInputBlur('T', 8)}
                 step="0.1"
                 min="0.1"
               />
+              <div className="range-hint">建议范围: 0.1 - 30 s （常用 5 - 15 s）</div>
             </div>
             
             <div className="param-group">
               <label>波长 L (m):</label>
               <input
                 type="number"
-                value={tempParams.L || ''}
-                onChange={(e) => handleFieldChange('L', e.target.value)}
-                onBlur={handleBlur}
+                value={inputValues.L}
+                onChange={(e) => handleInputChange('L', e.target.value)}
+                onBlur={() => handleInputBlur('L', undefined)}
                 step="1"
                 min="0.1"
               />
+              <div className="range-hint">建议范围: 0.1 - 500 m （可由 T/h 自动计算）</div>
             </div>
             
             <div className="param-group">
               <label>波高 H (m):</label>
               <input
                 type="number"
-                value={tempParams.H}
-                onChange={(e) => setTempParams({...tempParams, H: Number(e.target.value)})}
-                onBlur={handleBlur}
+                value={inputValues.H}
+                onChange={(e) => handleInputChange('H', e.target.value)}
+                onBlur={() => handleInputBlur('H', 2)}
                 step="0.1"
                 min="0.1"
               />
+              <div className="range-hint">建议范围: 0.1 - 10 m</div>
             </div>
           </section>
           
@@ -218,53 +238,85 @@ export default function App3() {
               <label>海底坡度 i:</label>
               <input
                 type="number"
-                value={tempParams.slope}
-                onChange={(e) => setTempParams({...tempParams, slope: Number(e.target.value)})}
-                onBlur={handleBlur}
+                value={inputValues.slope}
+                onChange={(e) => handleInputChange('slope', e.target.value)}
+                onBlur={() => handleInputBlur('slope', 0.01)}
                 step="0.001"
                 min="0.001"
                 max="0.1"
               />
-              <span className="unit">({(tempParams.slope * 100).toFixed(1)}%)</span>
+              <span className="unit">({(params.slope * 100).toFixed(1)}%)</span>
+              <div className="range-hint">建议范围: 0.001 - 0.1 （常用 0.005 - 0.05）</div>
             </div>
             
             <div className="param-group">
               <label>海湾凹进深度 (m):</label>
               <input
                 type="number"
-                value={tempParams.bayDepth}
-                onChange={(e) => setTempParams({...tempParams, bayDepth: Number(e.target.value)})}
-                onBlur={handleBlur}
+                value={inputValues.bayDepth}
+                onChange={(e) => handleInputChange('bayDepth', e.target.value)}
+                onBlur={() => handleInputBlur('bayDepth', 10)}
                 step="1"
                 min="0"
                 max="100"
               />
+              <div className="range-hint">建议范围: 0 - 100 m （较小值为浅湾，较大值为深湾）</div>
+            </div>
+            
+            <div className="param-group">
+              <label>海湾宽度 (m):</label>
+              <input
+                type="number"
+                value={inputValues.bayWidth}
+                onChange={(e) => handleInputChange('bayWidth', e.target.value)}
+                onBlur={() => handleInputBlur('bayWidth', 100)}
+                step="10"
+                min="20"
+                max="400"
+              />
+              <div className="range-hint">建议范围: 20 - 400 m</div>
             </div>
             
             <div className="param-group">
               <label>海岬凸出距离 (m):</label>
               <input
                 type="number"
-                value={tempParams.capeExtension}
-                onChange={(e) => setTempParams({...tempParams, capeExtension: Number(e.target.value)})}
-                onBlur={handleBlur}
+                value={inputValues.capeExtension}
+                onChange={(e) => handleInputChange('capeExtension', e.target.value)}
+                onBlur={() => handleInputBlur('capeExtension', 50)}
                 step="1"
                 min="0"
                 max="150"
               />
+              <div className="range-hint">建议范围: 0 - 150 m</div>
+            </div>
+            
+            <div className="param-group">
+              <label>海岬宽度 (m):</label>
+              <input
+                type="number"
+                value={inputValues.capeWidth}
+                onChange={(e) => handleInputChange('capeWidth', e.target.value)}
+                onBlur={() => handleInputBlur('capeWidth', 200)}
+                step="10"
+                min="20"
+                max="400"
+              />
+              <div className="range-hint">建议范围: 20 - 400 m</div>
             </div>
             
             <div className="param-group">
               <label>初始波向角 α₀ (°):</label>
               <input
                 type="number"
-                value={tempParams.alpha0}
-                onChange={(e) => setTempParams({...tempParams, alpha0: Number(e.target.value)})}
-                onBlur={handleBlur}
+                value={inputValues.alpha0}
+                onChange={(e) => handleInputChange('alpha0', e.target.value)}
+                onBlur={() => handleInputBlur('alpha0', 0)}
                 step="5"
                 min="-45"
                 max="45"
               />
+              <div className="range-hint">建议范围: -45° - 45°（常用 ±15°）</div>
             </div>
           </section>
           
@@ -276,10 +328,9 @@ export default function App3() {
               <label>
                 <input
                   type="checkbox"
-                  checked={tempParams.showWaveRays}
+                  checked={params.showWaveRays}
                   onChange={(e) => {
-                    setTempParams({...tempParams, showWaveRays: e.target.checked});
-                    handleBlur();
+                    setParams({...params, showWaveRays: e.target.checked});
                   }}
                 />
                 <span>显示波峰线和波向线</span>
@@ -290,10 +341,9 @@ export default function App3() {
               <label>
                 <input
                   type="checkbox"
-                  checked={tempParams.showDepthContours}
+                  checked={params.showDepthContours}
                   onChange={(e) => {
-                    setTempParams({...tempParams, showDepthContours: e.target.checked});
-                    handleBlur();
+                    setParams({...params, showDepthContours: e.target.checked});
                   }}
                 />
                 <span>显示等深线</span>
@@ -304,14 +354,29 @@ export default function App3() {
               <label>
                 <input
                   type="checkbox"
-                  checked={tempParams.showArrows}
+                  checked={params.showArrows}
                   onChange={(e) => {
-                    setTempParams({...tempParams, showArrows: e.target.checked});
-                    handleBlur();
+                    setParams({...params, showArrows: e.target.checked});
                   }}
                 />
                 <span>显示波向箭头</span>
               </label>
+            </div>
+            
+            <div className="param-group">
+              <label>波向线密度:</label>
+              <input
+                type="range"
+                min="8"
+                max="64"
+                step="4"
+                value={params.rayDensity}
+                onChange={(e) => {
+                  setParams({...params, rayDensity: Number(e.target.value)});
+                }}
+              />
+              <span className="unit">{params.rayDensity} 条</span>
+              <div className="range-hint">建议范围: 8 - 64 条（越多越密集，性能略受影响）</div>
             </div>
           </section>
           

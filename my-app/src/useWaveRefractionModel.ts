@@ -25,7 +25,9 @@ export interface ModelConfig extends WaveParameters {
   
   // 地形参数
   bayDepth: number; // 海湾凹进深度 (m)
+  bayWidth: number; // 海湾宽度 (m)
   capeExtension: number; // 岬角凸出距离 (m)
+  capeWidth: number; // 海岬宽度 (m)
   
   // 初始波向角 (深水区)
   alpha0: number; // degrees
@@ -54,7 +56,9 @@ const DEFAULT_CONFIG: ModelConfig = {
   // 地形参数
   slope: 0.01, // 坡度 1%
   bayDepth: 10, // 海湾凹进 10m
+  bayWidth: 100, // 海湾宽度 100m
   capeExtension: 50, // 岬角凸出 50m
+  capeWidth: 200, // 海岬宽度 200m
   
   // 初始波向角
   alpha0: 0 // 垂直入射
@@ -87,7 +91,9 @@ export function useWaveRefractionModel(userConfig?: Partial<ModelConfig>): Model
       gridY: config.gridY,
       slope: config.slope,
       bayDepth: config.bayDepth,
-      capeExtension: config.capeExtension
+      bayWidth: config.bayWidth,
+      capeExtension: config.capeExtension,
+      capeWidth: config.capeWidth
     };
     
   const coastline = generateCoastline(terrainConfig);
@@ -102,7 +108,7 @@ export function useWaveRefractionModel(userConfig?: Partial<ModelConfig>): Model
     
   // 4. 更新波向角α
   const alpha0_rad = (config.alpha0 * Math.PI) / 180;
-  updateWaveDirections(grid, dispersion.T, alpha0_rad);
+  updateWaveDirections(grid, alpha0_rad);
     console.log('波向角场计算完成');
     
     console.log('✅ 波浪折射模型计算完成！');
@@ -119,7 +125,9 @@ export function useWaveRefractionModel(userConfig?: Partial<ModelConfig>): Model
     config.H,
     config.slope,
     config.bayDepth,
+    config.bayWidth,
     config.capeExtension,
+    config.capeWidth,
     config.alpha0
   ]);
   

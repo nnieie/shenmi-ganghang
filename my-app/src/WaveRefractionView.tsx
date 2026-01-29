@@ -37,6 +37,7 @@ interface Props {
   showWaveRays?: boolean;
   showDepthContours?: boolean;
   showArrows?: boolean;
+  rayDensity?: number;
 }
 
 export function WaveRefractionView({
@@ -47,7 +48,8 @@ export function WaveRefractionView({
   config,
   showWaveRays = true,
   showDepthContours = true,
-  showArrows = true
+  showArrows = true,
+  rayDensity = 32
 }: Props) {
   const [selectedPoint, setSelectedPoint] = useState<SelectedPoint | null>(null);
 
@@ -186,36 +188,56 @@ export function WaveRefractionView({
   };
 
   const samplePoint = (x: number, y: number): GridPoint | undefined => {
-    if (x < 0 || x > config.domainWidth || y < 0 || y > config.domainHeight) {
-      return undefined;
+    // 如果在网格范围内，直接采样
+    if (x >= 0 && x <= config.domainWidth && y >= 0 && y <= config.domainHeight) {
+      const col = Math.min(gridX - 1, Math.max(0, Math.round(x / dxPhys)));
+      const row = Math.min(gridY - 1, Math.max(0, Math.round(y / dyPhys)));
+      return grid[row]?.[col];
     }
-    const col = Math.min(gridX - 1, Math.max(0, Math.round(x / dxPhys)));
-    const row = Math.min(gridY - 1, Math.max(0, Math.round(y / dyPhys)));
-    return grid[row]?.[col];
+    
+    // 如果在网格外部（深水区），返回深水参数
+    // 假设深水区波向角为初始波向角，水深足够深
+    if (y > config.domainHeight * 0.5) { // 只要在上方区域
+      const alpha0_rad = (config.alpha0 * Math.PI) / 180;
+      return {
+        x, y,
+        h: 100, // 假定深水
+        k: dispersion.k,
+        c: dispersion.C,
+        alpha: alpha0_rad
+      };
+    }
+    
+    return undefined;
   };
 
-  const traceRayFromDeep = (startIndex: number) => {
+  const traceRayFromDeep = (startX: number, startY: number) => {
     const path: Array<{ x: number; y: number }> = [];
-    const topPoint = grid[gridY - 1][startIndex];
-    if (!topPoint || topPoint.h <= 0.05) {
-      return path;
-    }
-
-    let currentX = topPoint.x;
-    let currentY = topPoint.y;
+    
+    let currentX = startX;
+    let currentY = startY;
     const stepSize = dyPhys * 0.85;
-    const maxSteps = gridY * 3;
+    const maxSteps = gridY * 4; // 增加步数以支持更长的路径
 
     for (let step = 0; step < maxSteps; step++) {
       const sample = samplePoint(currentX, currentY);
+      
+      // 如果采样失败（超出范围且不在深水区）或到达陆地
       if (!sample || sample.h <= 0.1) {
         const clampX = Math.max(0, Math.min(config.domainWidth, currentX));
         const coastY = getCoastlineY(clampX);
-        path.push({ x: clampX, y: coastY });
+        // 只有当确实接近海岸时才添加终点
+        if (currentY < config.domainHeight * 0.5) {
+           path.push({ x: clampX, y: coastY });
+        }
         break;
       }
 
-      path.push({ x: currentX, y: currentY });
+      // 只记录在视图范围内的点，或者稍微超出一点的点
+      if (currentX >= -config.domainWidth * 0.1 && currentX <= config.domainWidth * 1.1 &&
+          currentY >= 0 && currentY <= config.domainHeight * 1.1) {
+        path.push({ x: currentX, y: currentY });
+      }
 
       const dxStep = Math.sin(sample.alpha) * stepSize;
       const dyStep = Math.cos(sample.alpha) * stepSize;
@@ -224,44 +246,53 @@ export function WaveRefractionView({
       const distanceToCoast = Math.max(0, currentY - coastlineY);
       let adjustedDx = dxStep;
 
-      // 只有在靠近海岸时才施加横向调整
-      // 定义一个影响区域：只有当距离海岸小于某个阈值时才开始影响
-      const influenceThreshold = config.domainHeight * 0.35; // 35%的区域高度作为影响阈值
+      // 波向线弯曲效果：随着距离海岸越来越近，弯曲度逐渐增加
+      // 使用更大的影响区域，但让效果从远到近逐渐累积
+      const influenceThreshold = config.domainHeight * 0.5; // 50%区域都有轻微影响
       
       if (distanceToCoast > 0.01 && distanceToCoast < influenceThreshold && coastalFeatures.length) {
-        // 使用更陡峭的衰减函数，使得只有非常靠近海岸时才有明显效果
-        // 距离越近，权重越大
+        // 关键：使用高次幂函数让弯曲度逐渐增加
+        // 距离远时几乎没有偏转，距离近时偏转快速增加
         const normalizedDist = distanceToCoast / influenceThreshold;
-        const nearShoreWeight = Math.pow(1 - normalizedDist, 3); // 立方衰减，更陡峭
+        // 使用4次幂，让曲线更平缓地开始，然后快速增加
+        const nearShoreWeight = Math.pow(1 - normalizedDist, 4);
+        
+        // 根据地形特征调整强度
+        const featureIntensity = Math.max(config.bayDepth, config.capeExtension) / 50;
+        const intensityMultiplier = 0.12 + 0.08 * Math.min(featureIntensity, 2);
         
         let lateralAdjustment = 0;
 
         coastalFeatures.forEach(feature => {
           const dxToCenter = currentX - feature.x;
-          const variance = Math.max(4, feature.bandwidth * feature.bandwidth);
+          const effectiveBandwidth = feature.bandwidth * 2;
+          const variance = Math.max(100, effectiveBandwidth * effectiveBandwidth);
           const featureInfluence = Math.exp(-(dxToCenter * dxToCenter) / (2 * variance));
           if (featureInfluence < 1e-5) {
             return;
           }
           const direction = feature.type === 'bay' ? 1 : -1;
-          const normalizedOffset = dxToCenter / Math.max(feature.bandwidth, 10);
-          lateralAdjustment += direction * normalizedOffset * feature.strength * featureInfluence;
+          const normalizedOffset = dxToCenter / Math.max(effectiveBandwidth, 30);
+          lateralAdjustment += direction * normalizedOffset * feature.strength * featureInfluence * intensityMultiplier;
         });
 
         if (Math.abs(lateralAdjustment) > 1e-6) {
-          // 只使用近岸权重，并且调整强度
-          const tuning = stepSize * 0.65;
+          // 调整强度随距离递增
+          const tuning = stepSize * 0.15;
           adjustedDx += lateralAdjustment * nearShoreWeight * tuning;
         }
       }
 
-      const maxShift = stepSize * 0.75;
+      // 限制最大偏移，但让近岸处可以有更大偏转
+      const distRatio = Math.max(0, 1 - distanceToCoast / (config.domainHeight * 0.3));
+      const maxShift = stepSize * (0.05 + 0.2 * Math.pow(distRatio, 2));
       adjustedDx = Math.max(-maxShift, Math.min(maxShift, adjustedDx));
 
       currentX += adjustedDx;
       currentY -= dyStep;
 
-      if (currentX < 0 || currentX > config.domainWidth || currentY < 0) {
+      // 检查是否到达底部或离开区域
+      if (currentY < 0) {
         const clampX = Math.max(0, Math.min(config.domainWidth, currentX));
         const coastY = getCoastlineY(clampX);
         path.push({ x: clampX, y: coastY });
@@ -269,7 +300,7 @@ export function WaveRefractionView({
       }
     }
 
-    if (path.length < 2) {
+    if (path.length < 2 && currentY < config.domainHeight) {
       path.push({ x: currentX, y: getCoastlineY(currentX) });
     }
 
@@ -316,12 +347,49 @@ export function WaveRefractionView({
   };
 
   if (showWaveRays) {
-    const rayCount = 18;
+    const rayCount = rayDensity; // 使用用户设置的波向线密度
+    
+    // 计算覆盖范围
+    const alpha0_rad = (config.alpha0 * Math.PI) / 180;
+    const tanAlpha = Math.tan(alpha0_rad);
+    
+    // 射线方程近似：x_bottom = x_top + H * tan(alpha)
+    // => x_top = x_bottom - H * tan(alpha)
+    const offset = config.domainHeight * tanAlpha;
+    
+    // 计算需要的发射范围
+    // 我们希望覆盖底部的 [0, domainWidth] 以及可能的侧面
+    // 实际上，我们只需要保证可视区域内都有射线
+    // 如果 alpha > 0 (向右偏)，我们需要从左侧更远的地方发射
+    // 如果 alpha < 0 (向左偏)，我们需要从右侧更远的地方发射
+    
+    const minStartX = -offset;
+    const maxStartX = config.domainWidth - offset;
+    
+    // 结合原始范围 [0, domainWidth]，取并集
+    const effectiveMinX = Math.min(0, minStartX);
+    const effectiveMaxX = Math.max(config.domainWidth, maxStartX);
+    
+    // 稍微扩大一点范围以确保边缘覆盖
+    const margin = config.domainWidth * 0.1;
+    const startRangeMin = effectiveMinX - margin;
+    const startRangeMax = effectiveMaxX + margin;
+    const totalRange = startRangeMax - startRangeMin;
+
     for (let r = 0; r < rayCount; r++) {
-      const ratio = (r + 0.5) / rayCount;
-      const startIndex = Math.min(gridX - 1, Math.max(0, Math.round(ratio * (gridX - 1))));
-      const path = traceRayFromDeep(startIndex);
-      if (path.length > 2) {
+      const ratio = r / (rayCount - 1);
+      const startX = startRangeMin + ratio * totalRange;
+      const startY = config.domainHeight;
+      
+      const path = traceRayFromDeep(startX, startY);
+      
+      // 过滤掉完全在视图外的路径
+      const isVisible = path.some(p => 
+        p.x >= 0 && p.x <= config.domainWidth && 
+        p.y >= 0 && p.y <= config.domainHeight
+      );
+      
+      if (isVisible && path.length > 2) {
         rayPaths.push(attachDistanceToCoast(path));
       }
     }
@@ -416,7 +484,15 @@ export function WaveRefractionView({
         if (rawPoints.length > 2) {
           const avgY = rawPoints.reduce((sum, p) => sum + p.y, 0) / rawPoints.length;
           const avgCoastY = rawPoints.reduce((sum, p) => sum + p.coastY, 0) / rawPoints.length;
-          const curvatureStrength = 0.22 * (1 - targetDistance / (maxDistance + 1e-6));
+          
+          // 根据海湾凹进深度和海岬凸出距离动态调整起伏强度
+          // 基础强度随距离海岸的远近变化：越近起伏越大
+          const distanceRatio = 1 - targetDistance / (maxDistance + 2e-6);
+          // 地形特征影响因子：海湾和海岬越明显，起伏越大
+          const featureScale = Math.max(config.bayDepth, config.capeExtension) / 50; // 以50m为基准
+          // 综合起伏强度：基础0.15 + 地形影响0.25，并随距离增大
+          const baseCurvature = 0.15 + 0.25 * Math.min(featureScale, 2);
+          const curvatureStrength = baseCurvature * Math.pow(distanceRatio, 0.6);
 
           const points = rawPoints.map(p => {
             const coastDeviation = p.coastY - avgCoastY;

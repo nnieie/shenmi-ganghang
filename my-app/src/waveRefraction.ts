@@ -116,7 +116,9 @@ export interface TerrainConfig {
   gridY: number; // y方向网格数
   slope: number; // 海底坡度 i
   bayDepth: number; // 海湾凹进深度 (m)
+  bayWidth: number; // 海湾宽度 (m)
   capeExtension: number; // 岬角凸出距离 (m)
+  capeWidth: number; // 海岬宽度 (m)
   coastlineBaselineRatio?: number; // 海岸线基准高度占比 (默认 0.18)
 }
 
@@ -145,7 +147,7 @@ export interface GridPoint {
  * @returns 该x位置的海岸线y坐标（归一化，0-1范围）
  */
 export function coastlineFunction(x: number, config: TerrainConfig): number {
-  const { width, height, bayDepth, capeExtension, coastlineBaselineRatio } = config;
+  const { width, height, bayDepth, bayWidth, capeExtension, capeWidth, coastlineBaselineRatio } = config;
 
   // 基准海岸线位置（越小表示越靠近底部/海岸）
   const baselineRatio = coastlineBaselineRatio ?? 0.15;
@@ -153,13 +155,13 @@ export function coastlineFunction(x: number, config: TerrainConfig): number {
 
   // 使用高斯函数塑造海湾（向陆地凹进，y减小）
   const bayCenter = 0.28 * width;
-  const baySigma = 0.05 * width;
+  const baySigma = bayWidth / 2; // 使用用户设置的海湾宽度
   const bayScale = 2.6;
   const bayEffect = bayScale * bayDepth * Math.exp(-0.5 * Math.pow((x - bayCenter) / baySigma, 2));
 
   // 使用高斯函数塑造岬角（向海洋凸出，y减小）
   const capeCenter = 0.68 * width;
-  const capeSigma = 0.10 * width;
+  const capeSigma = capeWidth / 2; // 使用用户设置的海岬宽度
   const capeScale = 1.10;
   const capeEffect = capeScale * capeExtension * Math.exp(-0.5 * Math.pow((x - capeCenter) / capeSigma, 2));
 
@@ -294,79 +296,11 @@ export function updateWaveNumbers(grid: GridPoint[][], T: number): void {
 }
 
 /**
- * 根据色散结果和斯涅尔定律更新波向角
- * C·sinα = 常数，其中C为局部波速
+ * 使用有限差分法更新波向角
+ * 基于波波数矢量的无旋性条件：∇ × k = 0
+ * 即 ∂(k·sinα)/∂y = -∂(k·cosα)/∂x (其中α为与Y轴夹角)
  */
-export function updateWaveDirections(grid: GridPoint[][], T: number, alpha0: number): void {
-  if (!grid.length || !grid[0].length) {
-    return;
-  }
-
-  const sigma = (2 * Math.PI) / T;
-  const gridY = grid.length;
-  const gridX = grid[0].length;
-
-  // 每一列对应的斯涅尔常数
-  const snellConstants = new Array<number>(gridX).fill(0);
-
-  for (let i = 0; i < gridX; i++) {
-    // 从深水区（顶部）向下寻找首个水深足够的点
-    for (let j = gridY - 1; j >= 0; j--) {
-      const point = grid[j][i];
-      if (point.h > 0.1 && point.k > 0) {
-        const c = sigma / point.k;
-        snellConstants[i] = c * Math.sin(alpha0);
-        point.alpha = alpha0;
-        break;
-      }
-    }
-  }
-
-  // 向下遍历并根据斯涅尔定律更新波向角
-  for (let j = gridY - 2; j >= 0; j--) {
-    for (let i = 0; i < gridX; i++) {
-      const point = grid[j][i];
-      if (point.h <= 0.1 || point.k <= 0) {
-        point.alpha = 0;
-        continue;
-      }
-
-      const c = sigma / point.k;
-      const snell = snellConstants[i];
-
-      if (snell === 0) {
-        point.alpha = 0;
-        continue;
-      }
-
-      let ratio = snell / c;
-      const sign = ratio >= 0 ? 1 : -1;
-      ratio = Math.min(0.999, Math.max(-0.999, ratio));
-
-      let alpha = Math.asin(ratio);
-      if (Number.isNaN(alpha)) {
-        alpha = sign * (Math.PI / 2 - 0.01);
-      }
-
-      // 确保波浪主要向下传播
-      const cosAlpha = Math.cos(alpha);
-      if (cosAlpha <= 0) {
-        alpha = sign * (Math.PI / 2 - 0.01);
-      }
-
-      point.alpha = alpha;
-    }
-  }
-}
-
-/**
- * 使用有限差分法求解波向角分布（理论实现）
- * 求解偏微分方程：∂(k·cosα)/∂y = -∂(k·sinα)/∂x
- *
- * 这个函数展示了如何用有限差分法替换上面的简化方法
- * 目前未在实际代码中使用，仅作为理论参考
- */
-export function updateWaveDirectionsFDM(grid: GridPoint[][], T: number, alpha0: number): void {
+export function updateWaveDirections(grid: GridPoint[][], alpha0: number): void {
   if (!grid.length || !grid[0].length) {
     return;
   }
@@ -383,51 +317,62 @@ export function updateWaveDirectionsFDM(grid: GridPoint[][], T: number, alpha0: 
 
   // 使用有限差分法逐步求解
   // 从深水区向浅水区推进（从j=gridY-2到j=0）
+  // 离散化格式：(k·sinα)_j = (k·sinα)_(j+1) + dy * [∂(k·cosα)/∂x]_(j+1)
+  
   for (let j = gridY - 2; j >= 0; j--) {
     for (let i = 0; i < gridX; i++) {
       const point = grid[j][i];
-
+      
+      // 如果是陆地，跳过
       if (point.h <= 0.1 || point.k <= 0) {
         point.alpha = 0;
         continue;
       }
 
-      // 使用中心差分格式近似偏导数
-      // ∂(k·cosα)/∂y ≈ [k(j+1,i)·cosα(j+1,i) - k(j-1,i)·cosα(j-1,i)] / (2·dy)
-      // -∂(k·sinα)/∂x ≈ -[k(j,i+1)·sinα(j,i+1) - k(j,i-1)·sinα(j,i-1)] / (2·dx)
-
-      // 获取相邻点的值（需要边界处理）
-      const k_cos_up = (j + 1 < gridY) ? grid[j + 1][i].k * Math.cos(grid[j + 1][i].alpha) : 0;
-      const k_cos_down = (j - 1 >= 0) ? grid[j - 1][i].k * Math.cos(grid[j - 1][i].alpha) : 0;
-
-      const k_sin_right = (i + 1 < gridX) ? grid[j][i + 1].k * Math.sin(grid[j][i + 1].alpha) : 0;
-      const k_sin_left = (i - 1 >= 0) ? grid[j][i - 1].k * Math.sin(grid[j][i - 1].alpha) : 0;
-
-      // 有限差分近似
-      const d_kcos_dy = (k_cos_up - k_cos_down) / (2 * dy);
-      const d_ksin_dx = (k_sin_right - k_sin_left) / (2 * dx);
-
-      // 方程：∂(k·cosα)/∂y = -∂(k·sinα)/∂x
-      // 即：d_kcos_dy + d_ksin_dx = 0
-
-      // 这里需要迭代求解α，因为方程是非线性的
-      // 简化的处理：使用上一点的值作为初始猜测
-      let alpha = (j + 1 < gridY) ? grid[j + 1][i].alpha : alpha0;
-
-      // 简单的迭代求解（实际实现需要更复杂的算法）
-      for (let iter = 0; iter < 10; iter++) {
-        // 计算残差（简化版本）
-        const residual = d_kcos_dy + d_ksin_dx;
-
-        // 简单的修正（实际需要计算雅可比矩阵）
-        if (Math.abs(residual) > 1e-6) {
-          alpha -= 0.1 * residual; // 简单的梯度下降
-        }
+      // 上一层的点（深水侧）
+      const prevPoint = grid[j + 1][i];
+      const prevKSin = prevPoint.k * Math.sin(prevPoint.alpha);
+      
+      // 计算上一层的x方向导数 ∂(k·cosα)/∂x
+      // 使用中心差分，边界处使用单侧差分
+      let d_kcos_dx = 0;
+      
+      if (i > 0 && i < gridX - 1) {
+        const pRight = grid[j + 1][i + 1];
+        const pLeft = grid[j + 1][i - 1];
+        const valRight = pRight.k * Math.cos(pRight.alpha);
+        const valLeft = pLeft.k * Math.cos(pLeft.alpha);
+        d_kcos_dx = (valRight - valLeft) / (2 * dx);
+      } else if (i === 0) {
+        const pRight = grid[j + 1][i + 1];
+        const pCurr = grid[j + 1][i];
+        const valRight = pRight.k * Math.cos(pRight.alpha);
+        const valCurr = pCurr.k * Math.cos(pCurr.alpha);
+        d_kcos_dx = (valRight - valCurr) / dx;
+      } else {
+        const pCurr = grid[j + 1][i];
+        const pLeft = grid[j + 1][i - 1];
+        const valCurr = pCurr.k * Math.cos(pCurr.alpha);
+        const valLeft = pLeft.k * Math.cos(pLeft.alpha);
+        d_kcos_dx = (valCurr - valLeft) / dx;
       }
 
-      // 确保角度在合理范围内
-      alpha = Math.max(-Math.PI/2, Math.min(Math.PI/2, alpha));
+      // 计算当前层的 k·sinα
+      // val_j = val_j+1 + dy * ∂(k·cosα)/∂x
+      let currentKSin = prevKSin + dy * d_kcos_dx;
+      
+      // 反解 alpha
+      // sinα = currentKSin / k
+      let sinAlpha = currentKSin / point.k;
+      
+      // 限制范围
+      sinAlpha = Math.max(-0.999, Math.min(0.999, sinAlpha));
+      
+      let alpha = Math.asin(sinAlpha);
+      
       point.alpha = alpha;
     }
   }
 }
+
+

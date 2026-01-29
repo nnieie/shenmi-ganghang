@@ -258,6 +258,14 @@ body {
   margin-top: 4px;
 }
 
+/* 输入控件下方的建议范围小字 */
+.range-hint {
+  display: block;
+  font-size: 0.82em;
+  color: #7f8c8d;
+  margin-top: 6px;
+}
+
 /* 复选框组 */
 .checkbox-group {
   margin-bottom: 12px;
